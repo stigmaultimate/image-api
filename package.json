@@ -1,0 +1,10 @@
+{
+  "name": "image-to-array-api",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "sharp": "^0.33.3",
+    "gifuct-js": "^2.1.2",
+    "node-fetch": "^3.3.2"
+  }
+}
