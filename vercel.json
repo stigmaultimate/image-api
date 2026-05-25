@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "functions": {
+    "api/image-to-array.js": {
+      "maxDuration": 30,
+      "memory": 1024
+    }
+  }
+}
