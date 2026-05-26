@@ -90,7 +90,7 @@ module.exports = async function handler(req, res) {
     if (!url) return res.status(400).json({ error: "url é obrigatório" });
 
     // Cuidando para não estourar a memória/timeout da Vercel
-    const targetFps = Math.min(fps, 15); // Força máx 15 FPS pra não dar timeout
+    const targetFps = Math.min(fps, 15); // Força máx 15 FPS pra não dar timeouta
     const targetSize = Math.min(size, 80); // Limita o tamanho
 
     // Nomes de arquivos temporários na Vercel
