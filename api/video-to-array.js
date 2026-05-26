@@ -52,13 +52,12 @@ function extractFrames(videoPath, outputFolder, fps, width, height) {
 
   try { execSync(`chmod +x "${ffmpegPath}"`); } catch (_) {}
 
-  // FIX 1: Adicionado "scale=trunc(iw/2)*2:trunc(ih/2)*2" ANTES do scale final
-  //         para garantir dimensões pares (evita erro -22 do encoder PNG).
-  // FIX 2: Trocado "setparams=range=pc" por "scale" com flags=lanczos pra
-  //         evitar o crash de "Invalid color range" sem quebrar outros vídeos.
-  // FIX 3: format=rgba deixa o sharp receber exatamente 4 canais, sem surpresa.
-  const vf  = `fps=${fps},scale=${width}:${height}:flags=lanczos:force_original_aspect_ratio=disable,format=rgba`;
-  const cmd = `"${ffmpegPath}" -i "${videoPath}" -vf "${vf}" -q:v 2 "${outputFolder}/frame-%04d.png" 2>&1`;
+  // -color_range 1 força o ffmpeg a tratar o input como "tv/limited range"
+  // sem tentar ler a flag "reserved" do metadata que causa o crash -22.
+  // scale com force_original_aspect_ratio=disable garante dimensões exatas.
+  // format=rgb24 é o mais seguro pra saída PNG sem canal alpha desnecessário.
+  const vf  = `scale=${width}:${height}:flags=lanczos:force_original_aspect_ratio=disable,fps=${fps},format=rgb24`;
+  const cmd = `"${ffmpegPath}" -color_range 1 -i "${videoPath}" -vf "${vf}" -q:v 2 "${outputFolder}/frame-%04d.png" 2>&1`;
 
   try {
     execSync(cmd, { maxBuffer: 100 * 1024 * 1024 }); // buffer 100 MB pro stdout do ffmpeg
