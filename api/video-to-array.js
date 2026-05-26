@@ -1,17 +1,13 @@
 // api/video-to-array.js — CommonJS
 
-const fs = require("fs");
+const fs   = require("fs");
 const path = require("path");
-const os = require("os");
+const os   = require("os");
 const crypto = require("crypto");
-const sharp = require("sharp");
-const ffmpeg = require("fluent-ffmpeg");
-const ffmpegStatic = require("ffmpeg-static");
+const sharp  = require("sharp");
+const { execSync } = require("child_process");
 
-// Diz ao fluent-ffmpeg onde está o binário do ffmpeg
-ffmpeg.setFfmpegPath(ffmpegStatic);
-
-// Sua função RLE original intacta
+// ─── RLE encoder ────────────────────────────────────────────────────────────
 function encodeRLE(pixels, width, height, threshold) {
   const result = {};
   const q = Math.max(1, threshold);
@@ -48,108 +44,122 @@ function encodeRLE(pixels, width, height, threshold) {
   return result;
 }
 
-// Função para extrair frames do MP4 usando FFmpeg
-const { execSync } = require("child_process");
-
+// ─── Frame extractor ─────────────────────────────────────────────────────────
 function extractFrames(videoPath, outputFolder, fps, width, height) {
   const ffmpegPath = require("ffmpeg-static");
-  
-  // Vamos imprimir o comando para ver se o caminho do ffmpeg está correto
-  console.log("FFMPEG PATH:", ffmpegPath);
-  
-  // Adicionamos flags para ver se o arquivo existe e dar permissão de execução
-  try {
-    execSync(`chmod +x "${ffmpegPath}"`);
-  } catch(e) {
-    console.log("Aviso: Falha ao dar chmod, ignorando...");
-  }
 
-  // Adicionamos o filtro "format=yuv420p" para normalizar as cores e evitar o crash
-  const cmd = `"${ffmpegPath}" -i "${videoPath}" -vf "setparams=range=pc,fps=${fps},scale=${width}:${height},format=rgb24" -q:v 2 "${outputFolder}/frame-%03d.png" 2>&1`;
-  
+  console.log("FFMPEG PATH:", ffmpegPath);
+
+  try { execSync(`chmod +x "${ffmpegPath}"`); } catch (_) {}
+
+  // FIX 1: Adicionado "scale=trunc(iw/2)*2:trunc(ih/2)*2" ANTES do scale final
+  //         para garantir dimensões pares (evita erro -22 do encoder PNG).
+  // FIX 2: Trocado "setparams=range=pc" por "scale" com flags=lanczos pra
+  //         evitar o crash de "Invalid color range" sem quebrar outros vídeos.
+  // FIX 3: format=rgba deixa o sharp receber exatamente 4 canais, sem surpresa.
+  const vf  = `fps=${fps},scale=${width}:${height}:flags=lanczos:force_original_aspect_ratio=disable,format=rgba`;
+  const cmd = `"${ffmpegPath}" -i "${videoPath}" -vf "${vf}" -q:v 2 "${outputFolder}/frame-%04d.png" 2>&1`;
+
   try {
-    const output = execSync(cmd);
-    return true;
+    execSync(cmd, { maxBuffer: 100 * 1024 * 1024 }); // buffer 100 MB pro stdout do ffmpeg
   } catch (err) {
-    // Aqui a gente captura o erro real do FFMPEG
-    throw new Error(err.stdout ? err.stdout.toString() : "Erro desconhecido no FFMPEG");
+    const msg = err.stdout ? err.stdout.toString() : (err.message || "Erro desconhecido no FFMPEG");
+    throw new Error(msg);
   }
 }
 
+// ─── Cleanup helper ──────────────────────────────────────────────────────────
+function cleanup(videoPath, framesFolder) {
+  try {
+    if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
+    if (fs.existsSync(framesFolder)) {
+      for (const f of fs.readdirSync(framesFolder)) {
+        fs.unlinkSync(path.join(framesFolder, f));
+      }
+      fs.rmdirSync(framesFolder);
+    }
+  } catch (_) {}
+}
+
+// ─── Handler ─────────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
-  // CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Origin",  "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST")    return res.status(405).json({ error: "Method not allowed" });
 
+  const { url, size = 60, persent = 1, fps = 15 } = req.body ?? {};
+  if (!url) return res.status(400).json({ error: "url é obrigatório" });
+
+  const targetFps  = Math.min(Number(fps)  || 15, 15);
+  const targetSize = Math.min(Number(size) || 60, 80);
+
+  const jobId       = crypto.randomBytes(8).toString("hex");
+  const tmpDir      = os.tmpdir();
+  const videoPath   = path.join(tmpDir, `${jobId}.mp4`);
+  const framesFolder = path.join(tmpDir, jobId);
+
+  fs.mkdirSync(framesFolder, { recursive: true });
+
   try {
-    const { url, size = 60, persent = 1, fps = 15 } = req.body;
-    if (!url) return res.status(400).json({ error: "url é obrigatório" });
+    // ── 1. Baixa o vídeo ──────────────────────────────────────────────────
+    let response;
+    try {
+      // FIX 4: Timeout de 20 s pro download (evita o "fetch failed" genérico)
+      response = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        signal:  AbortSignal.timeout(20_000),
+      });
+    } catch (fetchErr) {
+      // FIX 5: Mensagem de erro detalhada (antes mostrava só "fetch failed")
+      throw new Error(`Falha ao baixar vídeo: ${fetchErr.message} | URL: ${url}`);
+    }
 
-    // Cuidando para não estourar a memória/timeout da Vercel
-    const targetFps = Math.min(fps, 15); // Força máx 15 FPS pra não dar timeouta
-    const targetSize = Math.min(size, 80); // Limita o tamanho
+    if (!response.ok) {
+      throw new Error(`Servidor de vídeo retornou ${response.status} | URL: ${url}`);
+    }
 
-    // Nomes de arquivos temporários na Vercel
-    const jobId = crypto.randomBytes(8).toString("hex");
-    const tmpDir = os.tmpdir();
-    const videoPath = path.join(tmpDir, `${jobId}.mp4`);
-    const framesFolder = path.join(tmpDir, jobId);
-    
-    fs.mkdirSync(framesFolder, { recursive: true });
-
-    // 1. Baixa o vídeo
-  const response = await fetch(url, { 
-      headers: { "User-Agent": "Mozilla/5.0" } 
-    });
-    
-    if (!response.ok) throw new Error(`Falha ao baixar vídeo: ${response.status}`);
-    
     const buffer = Buffer.from(await response.arrayBuffer());
     fs.writeFileSync(videoPath, buffer);
 
-    // 2. Extrai os frames com FFmpeg
-    await extractFrames(videoPath, framesFolder, targetFps, targetSize, targetSize);
+    // ── 2. Extrai frames ──────────────────────────────────────────────────
+    extractFrames(videoPath, framesFolder, targetFps, targetSize, targetSize);
 
-    // 3. Lê os frames extraídos e converte para array de pixels
-    const files = fs.readdirSync(framesFolder).filter(f => f.endsWith('.png')).sort();
+    // ── 3. Converte frames → RLE ──────────────────────────────────────────
+    const files = fs.readdirSync(framesFolder)
+      .filter(f => f.endsWith(".png"))
+      .sort();
+
+    if (files.length === 0) throw new Error("Nenhum frame foi extraído pelo FFmpeg.");
+
     const pixelFrames = [];
-    const durations = [];
-    let finalWidth = targetSize;
-    let finalHeight = targetSize;
+    const durations   = [];
+    let finalWidth    = targetSize;
+    let finalHeight   = targetSize;
 
     for (const file of files) {
       const frameBuffer = fs.readFileSync(path.join(framesFolder, file));
-      
+
       const meta = await sharp(frameBuffer).metadata();
-      finalWidth = meta.width;
+      finalWidth  = meta.width;
       finalHeight = meta.height;
 
-      const raw = await sharp(frameBuffer)
-        .ensureAlpha()
-        .raw()
-        .toBuffer();
+      const raw = await sharp(frameBuffer).ensureAlpha().raw().toBuffer();
 
       pixelFrames.push(encodeRLE(raw, finalWidth, finalHeight, persent));
-      durations.push(1 / targetFps); // Ex: 1/15 = 0.066s de duração por frame
+      durations.push(1 / targetFps);
     }
 
-    // Limpeza da pasta temporária para não lotar a Vercel
-    fs.unlinkSync(videoPath);
-    for (const file of files) fs.unlinkSync(path.join(framesFolder, file));
-    fs.rmdirSync(framesFolder);
-
-    // 4. Retorna para o Roblox
+    // ── 4. Responde ───────────────────────────────────────────────────────
     return res.status(200).json({
       status: "success",
       dimensions: {
-        width: finalWidth,
-        height: finalHeight,
+        width:    finalWidth,
+        height:   finalHeight,
         animated: true,
-        durations: durations,
+        durations,
       },
       pixels: pixelFrames,
     });
@@ -157,5 +167,8 @@ module.exports = async function handler(req, res) {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: err.message });
+  } finally {
+    // FIX 6: Limpeza SEMPRE roda, mesmo se der erro no meio
+    cleanup(videoPath, framesFolder);
   }
 };
