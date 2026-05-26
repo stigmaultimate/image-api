@@ -52,30 +52,17 @@ function extractFrames(videoPath, outputFolder, fps, width, height) {
 
   try { execSync(`chmod +x "${ffmpegPath}"`); } catch (_) {}
 
-  // O vídeo tem color range "tv, reserved" no metadata — flag inválida que
-  // causa crash em QUALQUER filtro -vf nessa versão do ffmpeg (erro -22).
-  // Solução: re-encode intermediário pra um .mp4 limpo sem essa flag,
-  // depois extrai os frames desse arquivo limpo.
-  const cleanPath = videoPath.replace(".mp4", "_clean.mp4");
-
-  const reencodeCmd = `"${ffmpegPath}" -y -i "${videoPath}" -c:v libx264 -crf 18 -preset ultrafast -color_range 2 -vf "scale=${width}:${height}:flags=lanczos" -an "${cleanPath}" 2>&1`;
-  try {
-    execSync(reencodeCmd, { maxBuffer: 100 * 1024 * 1024 });
-  } catch (err) {
-    const msg = err.stdout ? err.stdout.toString() : (err.message || "Erro no re-encode");
-    throw new Error("Re-encode falhou: " + msg);
-  }
-
-  const cmd = `"${ffmpegPath}" -i "${cleanPath}" -vf "fps=${fps},format=rgb24" -q:v 2 "${outputFolder}/frame-%04d.png" 2>&1`;
+  // Qualquer filtro -vf quebra com "Invalid color range" nessa versão do ffmpeg
+  // quando o vídeo tem flag "tv, reserved" no metadata.
+  // Solução: não usar -vf nenhum. Só -r pra controlar FPS.
+  // O sharp vai fazer o resize depois, frame a frame.
+  const cmd = `"${ffmpegPath}" -r ${fps} -i "${videoPath}" -r ${fps} "${outputFolder}/frame-%04d.png" 2>&1`;
   try {
     execSync(cmd, { maxBuffer: 100 * 1024 * 1024 });
   } catch (err) {
-    const msg = err.stdout ? err.stdout.toString() : (err.message || "Erro ao extrair frames");
+    const msg = err.stdout ? err.stdout.toString() : (err.message || "Erro desconhecido no FFMPEG");
     throw new Error(msg);
   }
-
-  // Limpa o arquivo intermediário
-  try { fs.unlinkSync(cleanPath); } catch (_) {}
 }
 
 // ─── Cleanup helper ──────────────────────────────────────────────────────────
@@ -151,14 +138,18 @@ module.exports = async function handler(req, res) {
     let finalWidth    = targetSize;
     let finalHeight   = targetSize;
 
+    // Sharp faz o resize aqui pois o ffmpeg não usou -vf scale
+    finalWidth  = targetSize;
+    finalHeight = targetSize;
+
     for (const file of files) {
       const frameBuffer = fs.readFileSync(path.join(framesFolder, file));
 
-      const meta = await sharp(frameBuffer).metadata();
-      finalWidth  = meta.width;
-      finalHeight = meta.height;
-
-      const raw = await sharp(frameBuffer).ensureAlpha().raw().toBuffer();
+      const raw = await sharp(frameBuffer)
+        .resize(targetSize, targetSize, { fit: "fill" })
+        .ensureAlpha()
+        .raw()
+        .toBuffer();
 
       pixelFrames.push(encodeRLE(raw, finalWidth, finalHeight, persent));
       durations.push(1 / targetFps);
