@@ -4,6 +4,10 @@
     "api/image-to-array.js": {
       "maxDuration": 30,
       "memory": 1024
+    },
+    "api/video-to-array.js": {
+      "maxDuration": 60,
+      "memory": 2048
     }
   }
 }
