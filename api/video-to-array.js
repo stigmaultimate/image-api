@@ -65,7 +65,7 @@ function extractFrames(videoPath, outputFolder, fps, width, height) {
   }
 
   // Adicionamos o filtro "format=yuv420p" para normalizar as cores e evitar o crash
-  const cmd = `"${ffmpegPath}" -i "${videoPath}" -vf "fps=${fps},scale=${width}:${height},format=yuv420p" -q:v 2 "${outputFolder}/frame-%03d.png" 2>&1`;
+  const cmd = `"${ffmpegPath}" -i "${videoPath}" -vf "setparams=range=pc,fps=${fps},scale=${width}:${height},format=rgb24" -q:v 2 "${outputFolder}/frame-%03d.png" 2>&1`;
   
   try {
     const output = execSync(cmd);
