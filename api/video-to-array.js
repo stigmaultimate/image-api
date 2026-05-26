@@ -52,12 +52,15 @@ function extractFrames(videoPath, outputFolder, fps, width, height) {
 
   try { execSync(`chmod +x "${ffmpegPath}"`); } catch (_) {}
 
-  // -color_range 1 força o ffmpeg a tratar o input como "tv/limited range"
-  // sem tentar ler a flag "reserved" do metadata que causa o crash -22.
-  // scale com force_original_aspect_ratio=disable garante dimensões exatas.
-  // format=rgb24 é o mais seguro pra saída PNG sem canal alpha desnecessário.
-  const vf  = `scale=${width}:${height}:flags=lanczos:force_original_aspect_ratio=disable,fps=${fps},format=rgb24`;
-  const cmd = `"${ffmpegPath}" -color_range 1 -i "${videoPath}" -vf "${vf}" -q:v 2 "${outputFolder}/frame-%04d.png" 2>&1`;
+  // O vídeo tem color range marcado como "tv, reserved" no metadata,
+  // o que causa "Invalid color range" em qualquer filtro que tente ler essa flag.
+  // A solução é fazer um re-encode parcial primeiro (-c:v libx264 -crf 0)
+  // pra um arquivo intermediário limpo, sem a flag corrompida, antes de extrair frames.
+  // Alternativa mais rápida: usar "scale2ref" com in_range forçado.
+  // O jeito mais simples e confiável nessa versão do ffmpeg é usar
+  // -vf com "colorspace" filter pra normalizar antes de qualquer coisa.
+  const vf  = `colorspace=all=bt709:iall=bt601-6-625:fast=1,scale=${width}:${height}:flags=lanczos,fps=${fps},format=rgb24`;
+  const cmd = `"${ffmpegPath}" -i "${videoPath}" -vf "${vf}" -q:v 2 "${outputFolder}/frame-%04d.png" 2>&1`;
 
   try {
     execSync(cmd, { maxBuffer: 100 * 1024 * 1024 }); // buffer 100 MB pro stdout do ffmpeg
