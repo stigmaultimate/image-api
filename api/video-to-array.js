@@ -52,16 +52,26 @@ function encodeRLE(pixels, width, height, threshold) {
 const { execSync } = require("child_process");
 
 function extractFrames(videoPath, outputFolder, fps, width, height) {
-  // Usamos o comando direto do ffmpeg-static que é mais estável
   const ffmpegPath = require("ffmpeg-static");
-  const cmd = `"${ffmpegPath}" -i "${videoPath}" -vf "fps=${fps},scale=${width}:${height}" "${outputFolder}/frame-%03d.png"`;
+  
+  // Vamos imprimir o comando para ver se o caminho do ffmpeg está correto
+  console.log("FFMPEG PATH:", ffmpegPath);
+  
+  // Adicionamos flags para ver se o arquivo existe e dar permissão de execução
+  try {
+    execSync(`chmod +x "${ffmpegPath}"`);
+  } catch(e) {
+    console.log("Aviso: Falha ao dar chmod, ignorando...");
+  }
+
+  const cmd = `"${ffmpegPath}" -i "${videoPath}" -vf "fps=${fps},scale=${width}:${height}" -q:v 2 "${outputFolder}/frame-%03d.png" 2>&1`;
   
   try {
-    execSync(cmd, { stdio: 'pipe' });
+    const output = execSync(cmd);
     return true;
   } catch (err) {
-    console.error("Erro no FFmpeg:", err.stderr ? err.stderr.toString() : err);
-    throw new Error("Conversão falhou");
+    // Aqui a gente captura o erro real do FFMPEG
+    throw new Error(err.stdout ? err.stdout.toString() : "Erro desconhecido no FFMPEG");
   }
 }
 
