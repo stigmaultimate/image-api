@@ -52,27 +52,37 @@ function extractFrames(videoPath, outputFolder, fps, width, height) {
 
   try { execSync(`chmod +x "${ffmpegPath}"`); } catch (_) {}
 
-  // O vídeo tem color range marcado como "tv, reserved" no metadata,
-  // o que causa "Invalid color range" em qualquer filtro que tente ler essa flag.
-  // A solução é fazer um re-encode parcial primeiro (-c:v libx264 -crf 0)
-  // pra um arquivo intermediário limpo, sem a flag corrompida, antes de extrair frames.
-  // Alternativa mais rápida: usar "scale2ref" com in_range forçado.
-  // O jeito mais simples e confiável nessa versão do ffmpeg é usar
-  // -vf com "colorspace" filter pra normalizar antes de qualquer coisa.
-  const vf  = `colorspace=all=bt709:iall=bt601-6-625:fast=1,scale=${width}:${height}:flags=lanczos,fps=${fps},format=rgb24`;
-  const cmd = `"${ffmpegPath}" -i "${videoPath}" -vf "${vf}" -q:v 2 "${outputFolder}/frame-%04d.png" 2>&1`;
+  // O vídeo tem color range "tv, reserved" no metadata — flag inválida que
+  // causa crash em QUALQUER filtro -vf nessa versão do ffmpeg (erro -22).
+  // Solução: re-encode intermediário pra um .mp4 limpo sem essa flag,
+  // depois extrai os frames desse arquivo limpo.
+  const cleanPath = videoPath.replace(".mp4", "_clean.mp4");
 
+  const reencodeCmd = `"${ffmpegPath}" -y -i "${videoPath}" -c:v libx264 -crf 18 -preset ultrafast -color_range 2 -vf "scale=${width}:${height}:flags=lanczos" -an "${cleanPath}" 2>&1`;
   try {
-    execSync(cmd, { maxBuffer: 100 * 1024 * 1024 }); // buffer 100 MB pro stdout do ffmpeg
+    execSync(reencodeCmd, { maxBuffer: 100 * 1024 * 1024 });
   } catch (err) {
-    const msg = err.stdout ? err.stdout.toString() : (err.message || "Erro desconhecido no FFMPEG");
+    const msg = err.stdout ? err.stdout.toString() : (err.message || "Erro no re-encode");
+    throw new Error("Re-encode falhou: " + msg);
+  }
+
+  const cmd = `"${ffmpegPath}" -i "${cleanPath}" -vf "fps=${fps},format=rgb24" -q:v 2 "${outputFolder}/frame-%04d.png" 2>&1`;
+  try {
+    execSync(cmd, { maxBuffer: 100 * 1024 * 1024 });
+  } catch (err) {
+    const msg = err.stdout ? err.stdout.toString() : (err.message || "Erro ao extrair frames");
     throw new Error(msg);
   }
+
+  // Limpa o arquivo intermediário
+  try { fs.unlinkSync(cleanPath); } catch (_) {}
 }
 
 // ─── Cleanup helper ──────────────────────────────────────────────────────────
 function cleanup(videoPath, framesFolder) {
   try {
+    const cleanPath = videoPath.replace(".mp4", "_clean.mp4");
+    if (fs.existsSync(cleanPath)) fs.unlinkSync(cleanPath);
     if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
     if (fs.existsSync(framesFolder)) {
       for (const f of fs.readdirSync(framesFolder)) {
