@@ -91,8 +91,10 @@ module.exports = async function handler(req, res) {
     fs.mkdirSync(framesFolder, { recursive: true });
 
     // 1. Baixa o vídeo
-    const fetch = (await import("node-fetch")).default;
-    const response = await fetch(url);
+  const response = await fetch(url, { 
+      headers: { "User-Agent": "Mozilla/5.0" } 
+    });
+    
     if (!response.ok) throw new Error(`Falha ao baixar vídeo: ${response.status}`);
     
     const buffer = Buffer.from(await response.arrayBuffer());
