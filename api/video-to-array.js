@@ -49,16 +49,20 @@ function encodeRLE(pixels, width, height, threshold) {
 }
 
 // Função para extrair frames do MP4 usando FFmpeg
+const { execSync } = require("child_process");
+
 function extractFrames(videoPath, outputFolder, fps, width, height) {
-  return new Promise((resolve, reject) => {
-    ffmpeg(videoPath)
-      .fps(fps)
-      .size(`${width}x${height}`)
-      .output(path.join(outputFolder, "frame-%03d.png"))
-      .on("end", () => resolve())
-      .on("error", (err) => reject(err))
-      .run();
-  });
+  // Usamos o comando direto do ffmpeg-static que é mais estável
+  const ffmpegPath = require("ffmpeg-static");
+  const cmd = `"${ffmpegPath}" -i "${videoPath}" -vf "fps=${fps},scale=${width}:${height}" "${outputFolder}/frame-%03d.png"`;
+  
+  try {
+    execSync(cmd, { stdio: 'pipe' });
+    return true;
+  } catch (err) {
+    console.error("Erro no FFmpeg:", err.stderr ? err.stderr.toString() : err);
+    throw new Error("Conversão falhou");
+  }
 }
 
 module.exports = async function handler(req, res) {
