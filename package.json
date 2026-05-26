@@ -1,10 +1,11 @@
 {
-  "name": "image-to-array-api",
+  "name": "minha-api",
   "version": "1.0.0",
-  "private": true,
   "dependencies": {
-    "sharp": "^0.33.3",
-    "gifuct-js": "^2.1.2",
-    "node-fetch": "^3.3.2"
+    "sharp": "^0.32.0",
+    "gifuct-js": "^2.1.0",
+    "node-fetch": "^2.6.7",
+    "fluent-ffmpeg": "^2.1.2",
+    "ffmpeg-static": "^5.1.0"
   }
 }
